@@ -2,15 +2,11 @@ package scraper
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/antchfx/htmlquery"
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -52,12 +48,22 @@ func GetGenres() ([]string, error) {
 }
 
 func ScrapeMovies(ctx context.Context, c SearchConfig) error {
-	// Create a new context with timeout
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	opts := chromedp.DefaultExecAllocatorOptions[:]
+	opts = append(opts,
+		chromedp.Flag("headless", false),       // Disable headless mode
+		chromedp.Flag("disable-gpu", false),    // Enable GPU (optional)
+		chromedp.Flag("start-maximized", true), // Start with a maximized window
+		chromedp.Flag("auto-open-devtools-for-tabs", true),
+	)
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
 
 	// Create chromedp context
-	ctx, cancel = chromedp.NewContext(ctx)
+	ctx, cancel = chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	// Create a new context with timeout
+	ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	var htmlContent string
@@ -67,57 +73,47 @@ func ScrapeMovies(ctx context.Context, c SearchConfig) error {
 	url := fmt.Sprintf("https://www.imdb.com/search/title/?title_type=%s&genres=%s&keywords=%s", c.Title, c.Genre, c.Keyword)
 	fmt.Println("Loading URL:", url)
 
-	port := flag.Int("port", 8544, "port")
-	flag.Parse()
-
-	// run server
-	go headerServer(fmt.Sprintf(":%d", *port))
-
-	var res string
+	// var res string
 	err = chromedp.Run(ctx,
-		setheaders(
-			fmt.Sprintf("http://localhost:%d", *port),
-			map[string]interface{}{
-				"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-				"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-				"Accept-Language": "en-US,en;q=0.5",
-				"Referer":         "https://www.google.com/",
-			},
-			&res,
-		),
-
 		chromedp.Navigate(url),
 
-		// chromedp.WaitVisible(`div.lister-list`),
-
-		// Wait for potential additional content
-		chromedp.Sleep(5*time.Second),
-
-		// Capture the entire page HTML
-		chromedp.OuterHTML(`html`, &htmlContent),
+		chromedp.WaitVisible(`.ipc-see-more__button`),
 
 		// Click "Load More" button repeatedly
 		chromedp.Evaluate(`
 			function loadMoreMovies() {
-					var loadMoreButton = document.querySelector('.load-more-button');
+					console.log("loadMoreMovies function invoked. pagination:", pagination)
+					var loadMoreButton = document.querySelector('.ipc-see-more__button');
 					if (loadMoreButton) {
 							loadMoreButton.click();
 							return true;
 					}
 					return false;
 			}
-
+			
 			// Attempt to load more movies multiple times
-			var attempts = 0;
+			let pagination = 0;
 			function autoLoadMore() {
-					if (attempts < 3 && loadMoreMovies()) {
-							attempts++;
-							// Wait for new content to load
-							setTimeout(autoLoadMore, 2000);
+					console.log("autoLoadMore function invoked. pagination:", pagination)
+					if (pagination <= 5 && loadMoreMovies()) {
+							pagination++;
+							setTimeout(autoLoadMore, 2000); 	// Wait for new content to load
+					} else {
+					 	console.log("Done loading. Calling doneLoading()")
+						document.body.classList.add('done-loading-result');
+						console.log("Done calling doneLoading()")
 					}
 			}
 			autoLoadMore();
 		`, nil),
+
+		chromedp.WaitVisible(`.done-loading-result`),
+
+		// Capture the entire page HTML
+		chromedp.OuterHTML(`html`, &htmlContent),
+
+		// Wait for potential additional content
+		chromedp.Sleep(1*time.Second),
 	)
 
 	if err != nil {
@@ -169,34 +165,3 @@ func ScrapeMovies(ctx context.Context, c SearchConfig) error {
 
 	return nil
 }
-
-// headerServer is a simple HTTP server that displays the passed headers in the html.
-func headerServer(addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
-		buf, err := json.MarshalIndent(req.Header, "", "  ")
-		if err != nil {
-			http.Error(res, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		fmt.Fprintf(res, indexHTML, string(buf))
-	})
-	return http.ListenAndServe(addr, mux)
-}
-
-// setheaders returns a task list that sets the passed headers.
-func setheaders(host string, headers map[string]interface{}, res *string) chromedp.Tasks {
-	return chromedp.Tasks{
-		network.Enable(),
-		network.SetExtraHTTPHeaders(network.Headers(headers)),
-		chromedp.Navigate(host),
-		chromedp.Text(`#result`, res, chromedp.ByID, chromedp.NodeVisible),
-	}
-}
-
-const indexHTML = `<!doctype html>
-<html>
-<body>
-  <div id="result">%s</div>
-</body>
-</html>`
