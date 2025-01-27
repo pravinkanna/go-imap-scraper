@@ -2,12 +2,15 @@ package scraper
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"slices"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/antchfx/htmlquery"
-	"github.com/chromedp/chromedp"
+	"github.com/pravinkanna/imdb-scraper/sqlite"
 )
 
 // SearchConfig store the information about the config for the search
@@ -19,27 +22,49 @@ type SearchConfig struct {
 
 // Movie stores information about a imdb movie
 type Movie struct {
-	ImdbID     string
-	Released   string
-	Creator    string
-	Level      string
-	URL        string
-	Language   string
-	Commitment string
-	Rating     string
+	ID           string
+	Name         string
+	ReleasedYear string
+	Rating       string
+	Directors    []string
+	Cast         []string
+	Summary      string
 }
 
-var xpaths = map[string]string{
-	"genre": `//*[@id="accordion-item-genreAccordion"]/div/section/button`,
+var BASE_URL = "https://www.imdb.com"
+
+// Function to get the filters from user (i.e) Genre and keyword
+func GetInput(genres []string) (SearchConfig, error) {
+	// Get the Genre from user and validate against the fetched Genres
+	var genre string
+	fmt.Printf("Please select one of the Genre (case sensitive)\n\n")
+	fmt.Printf("%s\n\n", strings.Join(genres, ", "))
+	fmt.Printf("Your Selection (Default: search all genre): ")
+	fmt.Scanln(&genre)
+	isValid := slices.Contains(genres, genre)
+	if genre != "" && !isValid {
+		return SearchConfig{}, errors.New("Not a valid genre. please try again restarting the script")
+	}
+	fmt.Println("Successfully selected genre:", genre)
+
+	// Get the keyword to search from user
+	var keyword string
+	fmt.Printf("Enter a keyword to search (Default: None): ")
+	fmt.Scanln(&keyword)
+	fmt.Println("Given keyword: ", keyword)
+
+	// Title is set as "feature" to filter only the movies
+	return SearchConfig{Title: "feature", Genre: genre, Keyword: keyword}, nil
 }
 
 // Returns the list of Genres from the IMDB website
 func GetGenres() ([]string, error) {
-	url := "https://www.imdb.com/search/title"
-	htmlStr, err := getHtml(url)
+	searchPageURL := fmt.Sprintf("%s/search/title", BASE_URL)
+	htmlStr, err := getHtml(searchPageURL)
 	if err != nil {
 		return []string{}, err
 	}
+
 	genres, err := parseGenre(htmlStr)
 	if err != nil {
 		return []string{}, err
@@ -47,84 +72,18 @@ func GetGenres() ([]string, error) {
 	return genres, nil
 }
 
-func ScrapeMovies(ctx context.Context, c SearchConfig) error {
-	opts := chromedp.DefaultExecAllocatorOptions[:]
-	opts = append(opts,
-		chromedp.Flag("headless", false),       // Disable headless mode
-		chromedp.Flag("disable-gpu", false),    // Enable GPU (optional)
-		chromedp.Flag("start-maximized", true), // Start with a maximized window
-		chromedp.Flag("auto-open-devtools-for-tabs", true),
-	)
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
+// Returns the individual movies url matching the search query
+func GetMoviesUrl(ctx context.Context, c SearchConfig) ([]string, error) {
+	var moviesUrl []string
 
-	// Create chromedp context
-	ctx, cancel = chromedp.NewContext(allocCtx)
-	defer cancel()
-
-	// Create a new context with timeout
-	ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	var htmlContent string
-	var err error
-
-	// Navigate to page and extract HTML
-	url := fmt.Sprintf("https://www.imdb.com/search/title/?title_type=%s&genres=%s&keywords=%s", c.Title, c.Genre, c.Keyword)
-	fmt.Println("Loading URL:", url)
-
-	// var res string
-	err = chromedp.Run(ctx,
-		chromedp.Navigate(url),
-
-		chromedp.WaitVisible(`.ipc-see-more__button`),
-
-		// Click "Load More" button repeatedly
-		chromedp.Evaluate(`
-			function loadMoreMovies() {
-					console.log("loadMoreMovies function invoked. pagination:", pagination)
-					var loadMoreButton = document.querySelector('.ipc-see-more__button');
-					if (loadMoreButton) {
-							loadMoreButton.click();
-							return true;
-					}
-					return false;
-			}
-			
-			// Attempt to load more movies multiple times
-			let pagination = 0;
-			function autoLoadMore() {
-					console.log("autoLoadMore function invoked. pagination:", pagination)
-					if (pagination <= 5 && loadMoreMovies()) {
-							pagination++;
-							setTimeout(autoLoadMore, 2000); 	// Wait for new content to load
-					} else {
-					 	console.log("Done loading. Calling doneLoading()")
-						document.body.classList.add('done-loading-result');
-						console.log("Done calling doneLoading()")
-					}
-			}
-			autoLoadMore();
-		`, nil),
-
-		chromedp.WaitVisible(`.done-loading-result`),
-
-		// Capture the entire page HTML
-		chromedp.OuterHTML(`html`, &htmlContent),
-
-		// Wait for potential additional content
-		chromedp.Sleep(1*time.Second),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to load page: %v", err)
-	}
-	fmt.Println("Loaded the page")
+	// Get teh HTML of the movie result page
+	url := fmt.Sprintf("%s/search/title/?title_type=%s&genres=%s&keywords=%s", BASE_URL, c.Title, c.Genre, c.Keyword)
+	searchResultHtml, err := getMovieSearchResult(ctx, url)
 
 	// Parse HTML with htmlquery
-	doc, err := htmlquery.Parse(strings.NewReader(htmlContent))
+	doc, err := htmlquery.Parse(strings.NewReader(searchResultHtml))
 	if err != nil {
-		return fmt.Errorf("failed to parse HTML: %v", err)
+		return moviesUrl, err
 	}
 	fmt.Println("Parsed the HTML:")
 
@@ -133,35 +92,68 @@ func ScrapeMovies(ctx context.Context, c SearchConfig) error {
 	fmt.Println("No. of movies len:", len(movieNodes))
 
 	for _, movie := range movieNodes {
-		title, year, rating := "", "", ""
+		href := ""
 
 		// Extract movie details using XPath
-		titleNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/div[1]/a/h3`)
+		aNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/div[1]/a`)
 		if err != nil {
-			fmt.Println("Failed to fetch Title")
+			fmt.Println("Failed to get href of the movie")
 		}
-		if titleNode != nil {
-			title = htmlquery.InnerText(titleNode)
+		if aNode != nil {
+			href = htmlquery.SelectAttr(aNode, "href")
+			movieLink := fmt.Sprintf("%s/%s", BASE_URL, href)
+			moviesUrl = append(moviesUrl, movieLink)
 		}
-		yearNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/div[2]/span[1]`)
-		if err != nil {
-			fmt.Println("Failed to fetch Year")
-		}
-		if yearNode != nil {
-			year = htmlquery.InnerText(yearNode)
-		}
-		ratingNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/span/div/span/span[1]`)
-		if err != nil {
-			fmt.Println("Failed to fetch Rating")
-		}
-		if ratingNode != nil {
-			rating = htmlquery.InnerText(ratingNode)
-		}
-
-		fmt.Printf("Title: %s, Year: %s, Rating: %s\n", title, year, rating)
 	}
 
-	fmt.Println("All Scraped!")
+	fmt.Println("All movie URLs Scraped!")
 
+	return moviesUrl, err
+}
+
+// Concurrently scrape movies data and store them
+func ScrapeMovieAndStore(ctx context.Context, db sqlite.Service, concurrency int, moviesUrl []string) error {
+	fmt.Println("Inside ScrapeMovieAndStore")
+
+	htmlsCh := make(chan string, concurrency)
+	var wg sync.WaitGroup
+	wg.Add(len(moviesUrl))
+
+	// Goroutine to parse and store the Movie data
+	go func() {
+		counter := len(moviesUrl)
+		for htmlStr := range htmlsCh {
+			defer wg.Done()
+			counter -= 1
+
+			// Parse the movie data from HTML
+			movie, err := parseMovie(htmlStr)
+			if err != nil {
+				fmt.Printf("Failed parsing movie: %+v", movie)
+				continue
+			}
+
+			fmt.Printf("Parsed movie: %+v\n", movie)
+			err = db.InsertMovie(movie.Name, movie.ReleasedYear, movie.Rating, movie.Summary, movie.Directors, movie.Cast)
+			if err != nil {
+				log.Panicf("Error inserting to SQLite: %+v", err)
+			}
+
+			if counter == 0 {
+				close(htmlsCh)
+			}
+		}
+
+		fmt.Println("Sent all data for parsing")
+	}()
+
+	// Concurrently scrape the movie data from URLs
+	htmlsCh, err := getHtmlsConcurrent(moviesUrl, htmlsCh)
+	if err != nil {
+		return err
+	}
+
+	wg.Wait()
+	fmt.Println("Done all data for parsing. Returning fn...")
 	return nil
 }

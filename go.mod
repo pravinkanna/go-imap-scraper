@@ -5,6 +5,7 @@ go 1.23.5
 require (
 	github.com/antchfx/htmlquery v1.3.4
 	github.com/chromedp/chromedp v0.12.1
+	github.com/mattn/go-sqlite3 v1.14.24
 )
 
 require (

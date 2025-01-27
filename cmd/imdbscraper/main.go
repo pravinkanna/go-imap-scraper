@@ -4,72 +4,53 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"slices"
-	"strings"
-	"time"
 
 	"github.com/pravinkanna/imdb-scraper/scraper"
+	"github.com/pravinkanna/imdb-scraper/sqlite"
 )
 
 func main() {
+	concurrency := 1
 	ctx := context.Background()
 
-	scrapeID := createResultDirectory()
+	// Initialize DB
+	db, err := sqlite.Connect()
+	if err != nil {
+		log.Panicf("Failed to initialize sqlite. Error: %+v", err)
+	}
+	defer db.Close()
+
+	err = db.CreateTable()
+	if err != nil {
+		log.Panicf("Failed to create tables in sqlite. Error: %+v", err)
+	}
 
 	// Fetch the list of Genres from IMDB
 	genres, err := scraper.GetGenres()
 	if err != nil {
-		fmt.Println("Failed to fetch page")
+		log.Panicf("Failed to get genres. Error: %+v", err)
 	}
 
-	searchConfig := getUserInput(genres)
-
-	// Function to Scrape the movie details and store it to the SQLite DB
-	err = scraper.ScrapeMovies(ctx, searchConfig, scrapeID)
+	// Get the filters from user as input (i.e)
+	searchConfig, err := scraper.GetInput(genres)
 	if err != nil {
-		log.Fatalln("Error scraping movies:", err)
-	}
-}
-
-// Function to Generate the scrapeID and create result directory
-func createResultDirectory() string {
-	// Create a result directory with a unique id
-	t := time.Now()
-	scrapeID := t.Format("20060102150405")
-	resultPath := fmt.Sprintf("./results/%s/", scrapeID)
-	if _, err := os.Stat(resultPath); os.IsNotExist(err) {
-		err := os.Mkdir(resultPath, os.ModePerm)
-		if err != nil {
-			log.Fatalf("Failed to create result directory: %+v", err)
-		}
+		log.Panicf("Failed to get input. Error: %+v", err)
 	}
 
-	return scrapeID
-}
-
-// Function to get the filters from user (i.e) Genre and keyword
-func getUserInput(genres []string) scraper.SearchConfig {
-
-	// Get the Genre from user and validate against the fetched Genres
-	var genre string
-	fmt.Printf("Please select one of the Genre (case sensitive)\n\n")
-	fmt.Printf("%s\n\n", strings.Join(genres, ", "))
-	fmt.Printf("Your Selection (Default: search all genre): ")
-	fmt.Scanln(&genre)
-	isValid := slices.Contains(genres, genre)
-	if genre != "" && !isValid {
-		log.Fatalf("Not a valid genre. please try again restarting the script")
+	// Fetch the list of movies matching the user input
+	moviesUrl, err := scraper.GetMoviesUrl(ctx, searchConfig)
+	if err != nil {
+		log.Panicf("Failed to get movies. Error: %+v", err)
 	}
-	fmt.Println("Successfully selected genre:", genre)
+	if len(moviesUrl) <= 0 {
+		log.Fatalln("No movies matched your query. Please try a different query")
+	}
 
-	// Get the keyword to search from user
-	var keyword string
-	fmt.Printf("Enter a keyword to search (Default: None): ")
-	fmt.Scanln(&keyword)
-	fmt.Println("Given keyword: ", keyword)
+	// Concurrently Scrape the movie data and store it to the SQLite DB
+	err = scraper.ScrapeMovieAndStore(ctx, db, concurrency, moviesUrl)
+	if err != nil {
+		log.Panicf("Failed to scrape movie and store. Error: %+v", err)
+	}
 
-	// Title is set as "feature" to filter only the movies
-	searchConfig := scraper.SearchConfig{Title: "feature", Genre: genre, Keyword: keyword}
-	return searchConfig
+	fmt.Println("Scraping process completed. Exiting...")
 }
