@@ -1,7 +1,6 @@
 package scraper
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/antchfx/htmlquery"
@@ -128,6 +127,6 @@ func parseMovie(htmlStr string) (Movie, error) {
 		Directors:    directors,
 		Cast:         cast,
 	}
-	fmt.Printf("MOVIE: %+v\n", movie)
+
 	return movie, nil
 }

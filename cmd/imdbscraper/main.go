@@ -67,6 +67,7 @@ func main() {
 	}
 	if len(moviesUrl) <= 0 {
 		logger.Warn("No movies matched your query. Please try a different query")
+		fmt.Println("No Movie matched your query. Try again later")
 		os.Exit(0)
 	}
 

@@ -63,6 +63,9 @@ func getHtmlsConcurrent(urls []string, htmlsCh chan string) (chan string, error)
 // Function to search for movies using the user input and return the search result page HTML
 // This function will handle the pagination
 func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (string, error) {
+	logger := logging.GetLogger()
+	logger.Info(fmt.Sprintf("Search Page URL: %s", url))
+
 	RESULTS_PER_PAGE := 50
 	MAX_PAGES := MAX_RESULTS / RESULTS_PER_PAGE
 	maxPagesStr := strconv.Itoa(MAX_PAGES)
@@ -84,7 +87,7 @@ func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (str
 						console.log("autoLoadMore function invoked. pagination:", pagination)
 						if (pagination <= maxPages && loadMoreMovies()) {
 								pagination++;
-								setTimeout(autoLoadMore, 1000);
+								setTimeout(autoLoadMore, 2000);
 						} else {
 						 	// Add the done class once pagination is enough or over
 							document.body.classList.add('done-loading-result');
@@ -113,11 +116,14 @@ func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (str
 	var htmlContent string
 	var err error
 
-	// var res string
+	logger.Info("Starting browser")
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(url),
 
-		chromedp.WaitVisible(`.ipc-see-more__button`),
+		chromedp.WaitVisible(`.ipc-title__text`),
+
+		// Wait for potential additional content
+		chromedp.Sleep(5*time.Second),
 
 		// Click "Load More" button repeatedly
 		chromedp.Evaluate(paginateJS, nil),
@@ -128,12 +134,14 @@ func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (str
 		chromedp.OuterHTML(`html`, &htmlContent),
 
 		// Wait for potential additional content
-		chromedp.Sleep(1*time.Second),
+		chromedp.Sleep(5*time.Second),
 	)
 
 	if err != nil {
 		return htmlContent, err
 	}
+
+	logger.Info(fmt.Sprintf("Successfully Fetched Movies from URL: %s", url))
 
 	return htmlContent, err
 }
