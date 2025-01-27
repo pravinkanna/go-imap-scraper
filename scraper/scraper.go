@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/antchfx/htmlquery"
+	"github.com/pravinkanna/imdb-scraper/logging"
 	"github.com/pravinkanna/imdb-scraper/sqlite"
 )
 
@@ -36,22 +37,20 @@ var BASE_URL = "https://www.imdb.com"
 // Function to get the filters from user (i.e) Genre and keyword
 func GetInput(genres []string) (SearchConfig, error) {
 	// Get the Genre from user and validate against the fetched Genres
-	var genre string
-	fmt.Printf("Please select one of the Genre (case sensitive)\n\n")
+	genre := ""
+	fmt.Printf("Please select one of the Genre:\n")
 	fmt.Printf("%s\n\n", strings.Join(genres, ", "))
-	fmt.Printf("Your Selection (Default: search all genre): ")
+	fmt.Printf("Genre (Optional, Case-sensitive): ")
 	fmt.Scanln(&genre)
 	isValid := slices.Contains(genres, genre)
 	if genre != "" && !isValid {
 		return SearchConfig{}, errors.New("Not a valid genre. please try again restarting the script")
 	}
-	fmt.Println("Successfully selected genre:", genre)
 
 	// Get the keyword to search from user
-	var keyword string
-	fmt.Printf("Enter a keyword to search (Default: None): ")
+	keyword := ""
+	fmt.Printf("Keyword to search (Optional): ")
 	fmt.Scanln(&keyword)
-	fmt.Println("Given keyword: ", keyword)
 
 	// Title is set as "feature" to filter only the movies
 	return SearchConfig{Title: "feature", Genre: genre, Keyword: keyword}, nil
@@ -74,6 +73,7 @@ func GetGenres() ([]string, error) {
 
 // Returns the individual movies url matching the search query
 func GetMoviesUrl(ctx context.Context, c SearchConfig, maxResults int) ([]string, error) {
+	logger := logging.GetLogger()
 	var moviesUrl []string
 
 	// Get teh HTML of the movie result page
@@ -85,11 +85,10 @@ func GetMoviesUrl(ctx context.Context, c SearchConfig, maxResults int) ([]string
 	if err != nil {
 		return moviesUrl, err
 	}
-	fmt.Println("Parsed the HTML:")
 
 	// XPath to extract movie details
 	movieNodes := htmlquery.Find(doc, `//*[@id="__next"]/main/div[2]/div[3]/section/section/div/section/section/div[2]/div/section/div[2]/div[2]/ul/li`)
-	fmt.Println("No. of movies len:", len(movieNodes))
+	logger.Info(fmt.Sprintf("No. of movies: %d", len(movieNodes)))
 
 	counter := maxResults
 	for _, movie := range movieNodes {
@@ -98,7 +97,7 @@ func GetMoviesUrl(ctx context.Context, c SearchConfig, maxResults int) ([]string
 		// Extract movie details using XPath
 		aNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/div[1]/a`)
 		if err != nil {
-			fmt.Println("Failed to get href of the movie")
+			logger.Warn("Failed to get href of the movie")
 			continue
 		}
 		if aNode != nil {
@@ -112,14 +111,13 @@ func GetMoviesUrl(ctx context.Context, c SearchConfig, maxResults int) ([]string
 		}
 	}
 
-	fmt.Println("All movie URLs Scraped!. Length:", len(moviesUrl))
+	logger.Info(fmt.Sprintf("All movie URLs Scraped!. Length: %d", len(moviesUrl)))
 	return moviesUrl, err
 }
 
 // Concurrently scrape movies data and store them
 func ScrapeMovieAndStore(ctx context.Context, db sqlite.Service, concurrency int, moviesUrl []string) error {
-	fmt.Println("Inside ScrapeMovieAndStore")
-
+	logger := logging.GetLogger()
 	htmlsCh := make(chan string, concurrency)
 	var wg sync.WaitGroup
 	wg.Add(len(moviesUrl))
@@ -134,22 +132,21 @@ func ScrapeMovieAndStore(ctx context.Context, db sqlite.Service, concurrency int
 			// Parse the movie data from HTML
 			movie, err := parseMovie(htmlStr)
 			if err != nil {
-				fmt.Printf("Failed parsing movie: %+v", movie)
+				logger.Warn(fmt.Sprintf("Failed parsing movie: %+v", movie))
 				continue
 			}
 
-			fmt.Printf("Parsed movie: %+v\n", movie)
+			logger.Info(fmt.Sprintf("Successfully Parsed movie: %s", movie.Name))
 			err = db.InsertMovie(movie.Name, movie.ReleasedYear, movie.Rating, movie.Summary, movie.Directors, movie.Cast)
 			if err != nil {
 				log.Panicf("Error inserting to SQLite: %+v", err)
 			}
+			logger.Info(fmt.Sprintf("Successfully inserted movie: %s", movie.Name))
 
 			if counter == 0 {
 				close(htmlsCh)
 			}
 		}
-
-		fmt.Println("Sent all data for parsing")
 	}()
 
 	// Concurrently scrape the movie data from URLs
@@ -159,6 +156,6 @@ func ScrapeMovieAndStore(ctx context.Context, db sqlite.Service, concurrency int
 	}
 
 	wg.Wait()
-	fmt.Println("Done all data for parsing. Returning fn...")
+	logger.Info("Successfully parsed and stored all the movies data")
 	return nil
 }

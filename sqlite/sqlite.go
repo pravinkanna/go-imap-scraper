@@ -27,7 +27,6 @@ func Connect() (Service, error) {
 	if err != nil {
 		return Service{}, err
 	}
-	fmt.Println("Connected to SQLite")
 
 	service := Service{db: db}
 
@@ -35,7 +34,6 @@ func Connect() (Service, error) {
 }
 
 func (s *Service) Close() error {
-	fmt.Println("Closing SQLite Connection")
 	return s.db.Close()
 }
 
@@ -56,8 +54,6 @@ func (s *Service) CreateTable() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Tables created in SQLite")
-
 	return nil
 }
 
@@ -83,7 +79,7 @@ func (s *Service) InsertMovie(
 	q := "INSERT OR IGNORE INTO movies  (name, released_year, rating, summary, directors, cast) VALUES (?, ?, ?, ?, ?, ?);"
 	insert, err := s.db.Prepare(q)
 	if err != nil {
-		fmt.Println(err)
+		return fmt.Errorf("error preparing insert statement: %w", err)
 	}
 	defer insert.Close()
 	res, err := insert.Exec(name, released, rating, summary, string(directorsJSON), string(castJSON))
@@ -92,11 +88,10 @@ func (s *Service) InsertMovie(
 	}
 
 	// Get the auto-generated ID if needed
-	lastID, err := res.LastInsertId()
+	_, err = res.LastInsertId()
 	if err != nil {
 		return fmt.Errorf("error getting last insert ID: %w", err)
 	}
 
-	fmt.Printf("Successfully inserted movie. ID: %d, Name: %s\n", lastID, name)
 	return nil
 }

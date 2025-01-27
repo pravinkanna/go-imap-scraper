@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/pravinkanna/imdb-scraper/logging"
 )
 
 // Function to fetch the HTML of the url and return it
@@ -45,12 +46,13 @@ func getHtml(url string) (string, error) {
 
 // Function to fetch the HTML of list of urls concurrently and returns them in a channel
 func getHtmlsConcurrent(urls []string, htmlsCh chan string) (chan string, error) {
+	logger := logging.GetLogger()
 	for _, url := range urls {
 		go func() {
 			time.Sleep(1 * time.Second)
 			html, err := getHtml(url)
 			if err != nil {
-				fmt.Println("Error fetching URL:", url, "\nError:", err)
+				logger.Info(fmt.Sprintf("Error fetching URL: %s. Error: %+v", url, err))
 			}
 			htmlsCh <- html
 		}()
@@ -64,9 +66,6 @@ func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (str
 	RESULTS_PER_PAGE := 50
 	MAX_PAGES := MAX_RESULTS / RESULTS_PER_PAGE
 	maxPagesStr := strconv.Itoa(MAX_PAGES)
-
-	fmt.Println("RESULTS_PER_PAGE:", RESULTS_PER_PAGE, "MAX_PAGES:", MAX_PAGES, "maxPagesStr:", maxPagesStr)
-
 	paginateJS := fmt.Sprintf(`
 				function loadMoreMovies() {
 						console.log("loadMoreMovies function invoked. pagination:", pagination)
@@ -135,7 +134,6 @@ func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (str
 	if err != nil {
 		return htmlContent, err
 	}
-	fmt.Println("Loaded the page")
 
 	return htmlContent, err
 }
