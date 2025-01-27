@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -59,7 +60,39 @@ func getHtmlsConcurrent(urls []string, htmlsCh chan string) (chan string, error)
 
 // Function to search for movies using the user input and return the search result page HTML
 // This function will handle the pagination
-func getMovieSearchResult(ctx context.Context, url string) (string, error) {
+func getMovieSearchResult(ctx context.Context, url string, MAX_RESULTS int) (string, error) {
+	RESULTS_PER_PAGE := 50
+	MAX_PAGES := MAX_RESULTS / RESULTS_PER_PAGE
+	maxPagesStr := strconv.Itoa(MAX_PAGES)
+
+	fmt.Println("RESULTS_PER_PAGE:", RESULTS_PER_PAGE, "MAX_PAGES:", MAX_PAGES, "maxPagesStr:", maxPagesStr)
+
+	paginateJS := fmt.Sprintf(`
+				function loadMoreMovies() {
+						console.log("loadMoreMovies function invoked. pagination:", pagination)
+						var loadMoreButton = document.querySelector('.ipc-see-more__button');
+						if (loadMoreButton) {
+								loadMoreButton.click();
+								return true;
+						}
+						return false;
+				}
+				
+				// Attempt to load more movies multiple times
+				let pagination = 0;
+				let maxPages = %s;
+				function autoLoadMore() {
+						console.log("autoLoadMore function invoked. pagination:", pagination)
+						if (pagination <= maxPages && loadMoreMovies()) {
+								pagination++;
+								setTimeout(autoLoadMore, 1000);
+						} else {
+						 	// Add the done class once pagination is enough or over
+							document.body.classList.add('done-loading-result');
+						}
+				}
+				autoLoadMore();
+			`, maxPagesStr)
 	opts := chromedp.DefaultExecAllocatorOptions[:]
 	opts = append(opts,
 		chromedp.Flag("headless", false),       // Disable headless mode
@@ -88,32 +121,7 @@ func getMovieSearchResult(ctx context.Context, url string) (string, error) {
 		chromedp.WaitVisible(`.ipc-see-more__button`),
 
 		// Click "Load More" button repeatedly
-		chromedp.Evaluate(`
-				function loadMoreMovies() {
-						console.log("loadMoreMovies function invoked. pagination:", pagination)
-						var loadMoreButton = document.querySelector('.ipc-see-more__button');
-						if (loadMoreButton) {
-								loadMoreButton.click();
-								return true;
-						}
-						return false;
-				}
-				
-				// Attempt to load more movies multiple times
-				let pagination = 0;
-				function autoLoadMore() {
-						console.log("autoLoadMore function invoked. pagination:", pagination)
-						if (pagination < 1 && loadMoreMovies()) {
-								pagination++;
-								setTimeout(autoLoadMore, 2000); 	// Wait for new content to load
-						} else {
-							console.log("Done loading. Calling doneLoading()")
-							document.body.classList.add('done-loading-result');
-							console.log("Done calling doneLoading()")
-						}
-				}
-				autoLoadMore();
-			`, nil),
+		chromedp.Evaluate(paginateJS, nil),
 
 		chromedp.WaitVisible(`.done-loading-result`),
 

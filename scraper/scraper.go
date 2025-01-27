@@ -73,12 +73,12 @@ func GetGenres() ([]string, error) {
 }
 
 // Returns the individual movies url matching the search query
-func GetMoviesUrl(ctx context.Context, c SearchConfig) ([]string, error) {
+func GetMoviesUrl(ctx context.Context, c SearchConfig, maxResults int) ([]string, error) {
 	var moviesUrl []string
 
 	// Get teh HTML of the movie result page
 	url := fmt.Sprintf("%s/search/title/?title_type=%s&genres=%s&keywords=%s", BASE_URL, c.Title, c.Genre, c.Keyword)
-	searchResultHtml, err := getMovieSearchResult(ctx, url)
+	searchResultHtml, err := getMovieSearchResult(ctx, url, maxResults)
 
 	// Parse HTML with htmlquery
 	doc, err := htmlquery.Parse(strings.NewReader(searchResultHtml))
@@ -91,6 +91,7 @@ func GetMoviesUrl(ctx context.Context, c SearchConfig) ([]string, error) {
 	movieNodes := htmlquery.Find(doc, `//*[@id="__next"]/main/div[2]/div[3]/section/section/div/section/section/div[2]/div/section/div[2]/div[2]/ul/li`)
 	fmt.Println("No. of movies len:", len(movieNodes))
 
+	counter := maxResults
 	for _, movie := range movieNodes {
 		href := ""
 
@@ -98,16 +99,20 @@ func GetMoviesUrl(ctx context.Context, c SearchConfig) ([]string, error) {
 		aNode, err := htmlquery.Query(movie, `/div/div/div/div[1]/div[2]/div[1]/a`)
 		if err != nil {
 			fmt.Println("Failed to get href of the movie")
+			continue
 		}
 		if aNode != nil {
 			href = htmlquery.SelectAttr(aNode, "href")
 			movieLink := fmt.Sprintf("%s/%s", BASE_URL, href)
 			moviesUrl = append(moviesUrl, movieLink)
+			counter -= 1
+		}
+		if counter == 0 {
+			break
 		}
 	}
 
-	fmt.Println("All movie URLs Scraped!")
-
+	fmt.Println("All movie URLs Scraped!. Length:", len(moviesUrl))
 	return moviesUrl, err
 }
 

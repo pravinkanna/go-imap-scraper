@@ -11,6 +11,7 @@ import (
 
 const (
 	concurrency = 1
+	maxResults  = 100
 )
 
 func main() {
@@ -41,7 +42,7 @@ func main() {
 	}
 
 	// Fetch the list of movies matching the user input
-	moviesUrl, err := scraper.GetMoviesUrl(ctx, searchConfig)
+	moviesUrl, err := scraper.GetMoviesUrl(ctx, searchConfig, maxResults)
 	if err != nil {
 		log.Panicf("Failed to get movies. Error: %+v", err)
 	}

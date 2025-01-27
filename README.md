@@ -45,11 +45,11 @@ make run
 
 2. Set scrape config in `cmd/imdbscraper/main.go`:
 
-```json
-{
-	"concurrency": "5",
-	"maxResults": 100
-}
+```go
+const (
+	concurrency = 1
+	maxResults  = 170
+)
 ```
 
 ## Bonus Features
