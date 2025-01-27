@@ -9,8 +9,11 @@ import (
 	"github.com/pravinkanna/imdb-scraper/sqlite"
 )
 
+const (
+	concurrency = 1
+)
+
 func main() {
-	concurrency := 1
 	ctx := context.Background()
 
 	// Initialize DB
